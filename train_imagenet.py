@@ -1,17 +1,3 @@
-# Copyright 2018 Google LLC
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-#You may obtain a copy of the License at
-#
-#    https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-# ==============================================================================
 """Train Imagenet."""
 from __future__ import absolute_import
 from __future__ import division
@@ -38,7 +24,7 @@ flags.DEFINE_string('master', 'local',
                     # 'Directory name to save the checkpoints. [checkpoint]')
 flags.DEFINE_string('checkpoint_dir', 'checkpoint',
                     'Directory name to save the checkpoints. [checkpoint]')
-flags.DEFINE_integer('batch_size', 32, 'Number of images in input batch. [64]') # ori 16
+flags.DEFINE_integer('batch_size', 64, 'Number of images in input batch. [64]') # ori 16
 flags.DEFINE_integer('shuffle_buffer_size', 100000, 'Number of records to load '
                      'before shuffling and yielding for consumption. [100000]')
 flags.DEFINE_integer('save_summaries_steps', 200, 'Number of seconds between '
@@ -68,6 +54,7 @@ FLAGS = flags.FLAGS
 def main(_, is_test=False):
   print('d_learning_rate', FLAGS.discriminator_learning_rate)
   print('g_learning_rate', FLAGS.generator_learning_rate)
+  print('data_dir', FLAGS.data_dir)
   print(FLAGS.loss_type, FLAGS.batch_size, FLAGS.beta1)
   print('gf_df_dim', FLAGS.gf_dim, FLAGS.df_dim)
   print('Starting the program..')
@@ -128,6 +115,7 @@ def main(_, is_test=False):
     print("G step: ", FLAGS.g_step)
     print("D_step: ", FLAGS.d_step)
     train_steps = tfgan.GANTrainSteps(FLAGS.g_step, FLAGS.d_step)
+
     tfgan.gan_train(
         train_ops,
         get_hooks_fn=tfgan.get_sequential_train_hooks(
@@ -135,6 +123,7 @@ def main(_, is_test=False):
         hooks=([tf.train.StopAtStepHook(num_steps=2000000)] + sync_hooks),
         logdir=logdir,
         # master=FLAGS.master,
+        # scaffold=scaffold, # load from google checkpoint
         is_chief=(FLAGS.task == 0),
         save_summaries_steps=FLAGS.save_summaries_steps,
         save_checkpoint_secs=FLAGS.save_checkpoint_secs,

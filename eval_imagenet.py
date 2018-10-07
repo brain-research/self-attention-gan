@@ -1,17 +1,3 @@
-# Copyright 2018 Google LLC
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-#You may obtain a copy of the License at
-#
-#    https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-# ==============================================================================
 """Generic train."""
 from __future__ import absolute_import
 from __future__ import division
@@ -33,7 +19,8 @@ tfgan = tf.contrib.gan
 
 
 flags.DEFINE_string(
-    'data_dir', '/home/zhanghan/Data',
+    # 'data_dir', '/gpu/hz138/Data/imagenet',  #'/home/hz138/Data/imagenet',
+    'data_dir', '/bigdata1/hz138/Data/imagenet',
     'Directory with Imagenet input data as sharded recordio files of pre-'
     'processed images.')
 flags.DEFINE_integer('z_dim', 128, 'The dimension of z')
@@ -48,18 +35,17 @@ flags.DEFINE_string('sample_dir', 'sample', 'Directory name to save the '
                     'image samples. [sample]')
 flags.DEFINE_string('eval_dir', 'checkpoint/eval', 'Directory name to save the '
                     'eval summaries . [eval]')
-flags.DEFINE_integer('batch_size', 32, 'Batch size of samples to feed into '
+flags.DEFINE_integer('batch_size', 64, 'Batch size of samples to feed into '
                      'Inception models for evaluation. [16]')
 flags.DEFINE_integer('shuffle_buffer_size', 5000, 'Number of records to load '
                      'before shuffling and yielding for consumption. [5000]')
 flags.DEFINE_integer('dcgan_generator_batch_size', 100, 'Size of batch to feed '
                      'into generator -- we may stack multiple of these later.')
-flags.DEFINE_integer('eval_sample_size', 1024,
+flags.DEFINE_integer('eval_sample_size', 50000,
                      'Number of samples to sample from '
                      'generator and real data. [1024]')
 flags.DEFINE_boolean('is_train', False, 'Use DCGAN only for evaluation.')
-# TODO(olganw) Find the best way to clean up these flags for eval and train.
-# These values need to be the same as they are in the training job.
+
 flags.DEFINE_integer('task', 0, 'The task id of the current worker. [0]')
 flags.DEFINE_integer('ps_tasks', 0, 'The number of ps tasks. [0]')
 flags.DEFINE_integer('num_workers', 1, 'The number of worker tasks. [1]')
@@ -72,15 +58,17 @@ flags.DEFINE_integer('eval_interval_secs', 300,
                      'and Frechet Inception Distance. [300]')
 
 flags.DEFINE_integer('num_classes', 1000, 'The number of classes in the dataset')
-flags.DEFINE_string('generator_type', 'baseline', 'test or baseline')
+flags.DEFINE_string('generator_type', 'test', 'test or baseline')
 
 FLAGS = flags.FLAGS
 
 
 def main(_):
   model_dir = '%s_%s' % ('imagenet', FLAGS.batch_size)
+  FLAGS.eval_dir = FLAGS.checkpoint_dir + '/eval'
   checkpoint_dir = os.path.join(FLAGS.checkpoint_dir, model_dir)
   log_dir = os.path.join(FLAGS.eval_dir, model_dir)
+  print('log_dir', log_dir)
   graph_def = None  # pylint: disable=protected-access
 
   # Batch size to feed batches of images through Inception and the generator
@@ -105,31 +93,29 @@ def main(_):
         label_offset=-1,
         shuffle_buffer_size=FLAGS.shuffle_buffer_size)
 
-  # Uniform distribution
-  # TODO(goodfellow) Use true distribution of ImageNet classses
   num_classes = FLAGS.num_classes
   gen_class_logits = tf.zeros((local_batch_size, num_classes))
   gen_class_ints = tf.multinomial(gen_class_logits, 1)
   gen_sparse_class = tf.squeeze(gen_class_ints)
 
 
-  with tf.variable_scope('model'):
 
     # Generate the first batch of generated images and extract activations;
     # this bootstraps the while_loop with a pools and logits tensor.
 
 
-    test_zs = utils.make_z_normal(1, local_batch_size, FLAGS.z_dim)
-    generator = generator_fn(
-        test_zs[0],
-        gen_sparse_class,
-        FLAGS.gf_dim,
-        FLAGS.num_classes)
+  test_zs = utils.make_z_normal(1, local_batch_size, FLAGS.z_dim)
+  generator = generator_fn(
+      test_zs[0],
+      gen_sparse_class,
+      FLAGS.gf_dim,
+      FLAGS.num_classes,
+      is_training=False)
 
 
 
-    pools, logits = utils.run_custom_inception(
-        generator, output_tensor=['pool_3:0', 'logits:0'], graph_def=graph_def)
+  pools, logits = utils.run_custom_inception(
+      generator, output_tensor=['pool_3:0', 'logits:0'], graph_def=graph_def)
 
   # Set up while_loop to compute activations of generated images from generator.
   def while_cond(g_pools, g_logits, i):  # pylint: disable=unused-argument
@@ -144,24 +130,23 @@ def main(_):
 
       test_zs = utils.make_z_normal(1, local_batch_size, FLAGS.z_dim)
       # Uniform distribution
-      # TODO(goodfellow) Use true distribution of ImageNet classses
       gen_class_logits = tf.zeros((local_batch_size, num_classes))
       gen_class_ints = tf.multinomial(gen_class_logits, 1)
       gen_sparse_class = tf.squeeze(gen_class_ints)
 
-      with tf.variable_scope('model'):
-        generator = generator_fn(
-          test_zs[0],
-          gen_sparse_class,
-          FLAGS.gf_dim,
-          FLAGS.num_classes)
+      generator = generator_fn(
+        test_zs[0],
+        gen_sparse_class,
+        FLAGS.gf_dim,
+        FLAGS.num_classes,
+        is_training=False)
 
-        pools, logits = utils.run_custom_inception(
-            generator,
-            output_tensor=['pool_3:0', 'logits:0'],
-            graph_def=graph_def)
-        g_pools = tf.concat([g_pools, pools], 0)
-        g_logits = tf.concat([g_logits, logits], 0)
+      pools, logits = utils.run_custom_inception(
+          generator,
+          output_tensor=['pool_3:0', 'logits:0'],
+          graph_def=graph_def)
+      g_pools = tf.concat([g_pools, pools], 0)
+      g_logits = tf.concat([g_logits, logits], 0)
 
       return (g_pools, g_logits, tf.add(i, 1))
 
@@ -183,25 +168,22 @@ def main(_):
   new_generator_pools_list.set_shape([FLAGS.eval_sample_size, 2048])
   new_generator_logits_list.set_shape([FLAGS.eval_sample_size, 1008])
 
-  # TODO(sbhupatiraju) Why is FID negative?
-
   # Get a small batch of samples from generator to dispaly in TensorBoard
   vis_batch_size = 16
   eval_vis_zs = utils.make_z_normal(
       1, vis_batch_size, FLAGS.z_dim)
-  # Uniform distribution
-  # TODO(goodfellow) Use true distribution of ImageNet classses
+
   gen_class_logits_vis = tf.zeros((vis_batch_size, num_classes))
   gen_class_ints_vis = tf.multinomial(gen_class_logits_vis, 1)
   gen_sparse_class_vis = tf.squeeze(gen_class_ints_vis)
 
-  with tf.variable_scope('model'):
-    eval_vis_images = generator_fn(
-        eval_vis_zs[0],
-        gen_sparse_class_vis,
-        FLAGS.gf_dim,
-        FLAGS.num_classes
-        )
+  eval_vis_images = generator_fn(
+      eval_vis_zs[0],
+      gen_sparse_class_vis,
+      FLAGS.gf_dim,
+      FLAGS.num_classes,
+      is_training=False
+      )
   eval_vis_images = tf.cast((eval_vis_images + 1.) * 127.5, tf.uint8)
 
   with tf.variable_scope('eval_vis'):
