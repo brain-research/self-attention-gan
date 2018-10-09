@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+
 """The DCGAN Model."""
 from __future__ import absolute_import
 from __future__ import division
@@ -30,12 +31,13 @@ import utils_ori as utils
 tfgan = tf.contrib.gan
 
 flags.DEFINE_string(
-    'data_dir', '/home/zhanghan/Data',
+    # 'data_dir', '/gpu/hz138/Data/imagenet', #'/home/hz138/Data/imagenet',
+    'data_dir', '/bigdata1/hz138/Data/imagenet',
     'Directory with Imagenet input data as sharded recordio files of pre-'
     'processed images.')
 flags.DEFINE_float('discriminator_learning_rate', 0.0004,
                    'Learning rate of for adam. [0.0004]')
-flags.DEFINE_float('generator_learning_rate', 0.0004,
+flags.DEFINE_float('generator_learning_rate', 0.0001,
                    'Learning rate of for adam. [0.0004]')
 flags.DEFINE_float('beta1', 0.0, 'Momentum term of adam. [0.5]')
 flags.DEFINE_integer('image_size', 128, 'The size of image to use '
@@ -50,8 +52,8 @@ flags.DEFINE_integer('df_dim', 64, 'Dimensionality of df. [64]')
 flags.DEFINE_integer('number_classes', 1000, 'The number of classes in the dataset')
 flags.DEFINE_string('loss_type', 'hinge_loss', 'the loss type can be'
                     ' hinge_loss or kl_loss')
-flags.DEFINE_string('generator_type', 'baseline', 'test or baseline')
-flags.DEFINE_string('discriminator_type', 'baseline', 'test or baseline')
+flags.DEFINE_string('generator_type', 'test', 'test or baseline')
+flags.DEFINE_string('discriminator_type', 'test', 'test or baseline')
 
 
 
@@ -123,11 +125,12 @@ class SNGAN(object):
     # (non-local) replicas, the ReplicaDeviceSetter distributes the variables
     # across the different devices.
     current_step = tf.cast(self.global_step, tf.float32)
-    g_ratio = (1.0 + 2e-5 * tf.maximum((current_step - 100000.0), 0.0))
-    g_ratio = tf.minimum(g_ratio, 4.0)
+    # g_ratio = (1.0 + 2e-5 * tf.maximum((current_step - 100000.0), 0.0))
+    # g_ratio = tf.minimum(g_ratio, 4.0)
     self.d_learning_rate = FLAGS.discriminator_learning_rate
+    self.g_learning_rate = FLAGS.generator_learning_rate
     # self.g_learning_rate = FLAGS.generator_learning_rate / (1.0 + 2e-5 * tf.cast(self.global_step, tf.float32))
-    self.g_learning_rate = FLAGS.generator_learning_rate / g_ratio
+    # self.g_learning_rate = FLAGS.generator_learning_rate / g_ratio
     with tf.device(tf.train.replica_device_setter(config.ps_tasks)):
       self.d_opt = tf.train.AdamOptimizer(
           self.d_learning_rate, beta1=FLAGS.beta1)
@@ -139,47 +142,49 @@ class SNGAN(object):
         self.g_opt = tf.train.SyncReplicasOptimizer(
             opt=self.g_opt, replicas_to_aggregate=config.replicas_to_aggregate)
 
-    with tf.variable_scope('model') as model_scope:
-      if config.num_towers > 1:
-        all_d_grads = []
-        all_g_grads = []
-        for idx, device in enumerate(self.devices):
-          with tf.device('/%s' % device):
-            with tf.name_scope('device_%s' % idx):
-              with ops.variables_on_gpu0():
-                self.build_model_single_gpu(
-                    gpu_idx=idx,
-                    batch_size=config.batch_size,
-                    num_towers=config.num_towers)
-                d_grads = self.d_opt.compute_gradients(self.d_losses[-1],
-                                                       var_list=self.d_vars)
-                g_grads = self.g_opt.compute_gradients(self.g_losses[-1],
-                                                       var_list=self.g_vars)
-                all_d_grads.append(d_grads)
-                all_g_grads.append(g_grads)
-                model_scope.reuse_variables()
-        d_grads = ops.avg_grads(all_d_grads)
-        g_grads = ops.avg_grads(all_g_grads)
-      else:
-        with tf.device(tf.train.replica_device_setter(config.ps_tasks)):
-          # TODO(olganw): reusing virtual batchnorm doesn't work in the multi-
-          # replica case.
-          self.build_model_single_gpu(batch_size=config.batch_size,
-                                      num_towers=config.num_towers)
-          d_grads = self.d_opt.compute_gradients(self.d_losses[-1],
-                                                 var_list=self.d_vars)
-          g_grads = self.g_opt.compute_gradients(self.g_losses[-1],
-                                                 var_list=self.g_vars)
+    if config.num_towers > 1:
+      all_d_grads = []
+      all_g_grads = []
+      for idx, device in enumerate(self.devices):
+        with tf.device('/%s' % device):
+          with tf.name_scope('device_%s' % idx):
+            with ops.variables_on_gpu0():
+              self.build_model_single_gpu(
+                  gpu_idx=idx,
+                  batch_size=config.batch_size,
+                  num_towers=config.num_towers)
+              d_grads = self.d_opt.compute_gradients(self.d_losses[-1],
+                                                     var_list=self.d_vars)
+              g_grads = self.g_opt.compute_gradients(self.g_losses[-1],
+                                                     var_list=self.g_vars)
+              all_d_grads.append(d_grads)
+              all_g_grads.append(g_grads)
+      d_grads = ops.avg_grads(all_d_grads)
+      g_grads = ops.avg_grads(all_g_grads)
+    else:
+      with tf.device(tf.train.replica_device_setter(config.ps_tasks)):
+        # TODO(olganw): reusing virtual batchnorm doesn't work in the multi-
+        # replica case.
+        self.build_model_single_gpu(batch_size=config.batch_size,
+                                    num_towers=config.num_towers)
+        d_grads = self.d_opt.compute_gradients(self.d_losses[-1],
+                                               var_list=self.d_vars)
+        g_grads = self.g_opt.compute_gradients(self.g_losses[-1],
+                                               var_list=self.g_vars)
     with tf.device(tf.train.replica_device_setter(config.ps_tasks)):
+      update_moving_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+      print('update_moving_ops', update_moving_ops)
       if config.sync_replicas:
-        d_step = tf.get_variable('d_step', initializer=0, trainable=False)
-        self.d_optim = self.d_opt.apply_gradients(d_grads, global_step=d_step)
-        g_step = tf.get_variable('g_step', initializer=0, trainable=False)
-        self.g_optim = self.g_opt.apply_gradients(g_grads, global_step=g_step)
+        with tf.control_dependencies(update_moving_ops):
+          d_step = tf.get_variable('d_step', initializer=0, trainable=False)
+          self.d_optim = self.d_opt.apply_gradients(d_grads, global_step=d_step)
+          g_step = tf.get_variable('g_step', initializer=0, trainable=False)
+          self.g_optim = self.g_opt.apply_gradients(g_grads, global_step=g_step)
       else:
         # Don't create any additional counters, and don't update the global step
-        self.d_optim = self.d_opt.apply_gradients(d_grads)
-        self.g_optim = self.g_opt.apply_gradients(g_grads)
+        with tf.control_dependencies(update_moving_ops):
+          self.d_optim = self.d_opt.apply_gradients(d_grads)
+          self.g_optim = self.g_opt.apply_gradients(g_grads)
 
   def build_model_single_gpu(self, gpu_idx=0, batch_size=1, num_towers=1):
     """Builds a model for a single GPU.
@@ -339,8 +344,8 @@ class SNGAN(object):
     """Get variables."""
     t_vars = tf.trainable_variables()
     # TODO(olganw): scoping or collections for this instead of name hack
-    self.d_vars = [var for var in t_vars if var.name.startswith('model/Discriminator')]
-    self.g_vars = [var for var in t_vars if var.name.startswith('model/Generator')]
+    self.d_vars = [var for var in t_vars if var.name.startswith('model/d_')]
+    self.g_vars = [var for var in t_vars if var.name.startswith('model/g_')]
     self.sigma_ratio_vars = [var for var in t_vars if 'sigma_ratio' in var.name]
     for x in self.d_vars:
       assert x not in self.g_vars

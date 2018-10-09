@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+
 """The building block ops for Spectral Normalization GAN."""
 from __future__ import absolute_import
 from __future__ import division
@@ -261,7 +262,7 @@ def sn_embedding(x, number_classes, embedding_size, sn_iters=1,
     return tf.nn.embedding_lookup(embedding_map_bar, x)
 
 
-class ConditionalBatchNorm(object):
+class ConditionalBatchNorm_old(object):
   """Conditional BatchNorm.
 
   For each  class, it has a specific gamma and beta as normalization variable.
@@ -300,6 +301,79 @@ class ConditionalBatchNorm(object):
       outputs.set_shape(inputs_shape)
       return outputs
 
+class ConditionalBatchNorm(object):
+  """Conditional BatchNorm.
+
+  For each  class, it has a specific gamma and beta as normalization variable.
+  """
+
+  def __init__(self, num_categories, name='conditional_batch_norm', decay_rate=0.999, center=True,
+               scale=True):
+    with tf.variable_scope(name):
+      self.name = name
+      self.num_categories = num_categories
+      self.center = center
+      self.scale = scale
+      self.decay_rate = decay_rate
+
+  def __call__(self, inputs, labels, is_training=True):
+    inputs = tf.convert_to_tensor(inputs)
+    inputs_shape = inputs.get_shape()
+    params_shape = inputs_shape[-1:]
+    axis = [0, 1, 2]
+    shape = tf.TensorShape([self.num_categories]).concatenate(params_shape)
+    moving_shape = tf.TensorShape([1, 1, 1]).concatenate(params_shape)
+
+    with tf.variable_scope(self.name):
+      self.gamma = tf.get_variable(
+          'gamma', shape,
+          initializer=tf.ones_initializer())
+      self.beta = tf.get_variable(
+          'beta', shape,
+          initializer=tf.zeros_initializer())
+      self.moving_mean = tf.get_variable('mean', moving_shape,
+                          initializer=tf.zeros_initializer(),
+                          trainable=False)
+      self.moving_var = tf.get_variable('var', moving_shape,
+                          initializer=tf.ones_initializer(),
+                          trainable=False)
+
+      beta = tf.gather(self.beta, labels)
+      beta = tf.expand_dims(tf.expand_dims(beta, 1), 1)
+      gamma = tf.gather(self.gamma, labels)
+      gamma = tf.expand_dims(tf.expand_dims(gamma, 1), 1)
+      decay = self.decay_rate
+      variance_epsilon = 1E-5
+      if is_training:
+        mean, variance = tf.nn.moments(inputs, axis, keep_dims=True)
+        update_mean = tf.assign(self.moving_mean, self.moving_mean * decay + mean * (1 - decay))
+        update_var = tf.assign(self.moving_var, self.moving_var * decay + variance * (1 - decay))
+        tf.add_to_collection(tf.GraphKeys.UPDATE_OPS, update_mean)
+        tf.add_to_collection(tf.GraphKeys.UPDATE_OPS, update_var)
+        #with tf.control_dependencies([update_mean, update_var]):
+        outputs = tf.nn.batch_normalization(
+            inputs, mean, variance, beta, gamma, variance_epsilon)
+      else:
+        outputs = tf.nn.batch_normalization(
+              inputs, self.moving_mean, self.moving_var, beta, gamma, variance_epsilon)
+      outputs.set_shape(inputs_shape)
+      return outputs
+
+class batch_norm(object):
+  def __init__(self, epsilon=1e-5, momentum = 0.9999, name="batch_norm"):
+    with tf.variable_scope(name):
+      self.epsilon  = epsilon
+      self.momentum = momentum
+      self.name = name
+
+  def __call__(self, x, train=True):
+    return tf.contrib.layers.batch_norm(x,
+                      decay=self.momentum,
+                      # updates_collections=None,
+                      epsilon=self.epsilon,
+                      scale=True,
+                      is_training=train,
+                      scope=self.name)
 
 class BatchNorm(object):
   """The Batch Normalization layer."""

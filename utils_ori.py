@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+
 """Some codes from https://github.com/Newmu/dcgan_code."""
 
 from __future__ import absolute_import
@@ -50,7 +51,8 @@ def run_custom_inception(
     images,
     output_tensor,
     graph_def=None,
-    image_size=classifier_metrics.INCEPTION_DEFAULT_IMAGE_SIZE):
+    # image_size=classifier_metrics.INCEPTION_DEFAULT_IMAGE_SIZE):
+    image_size=299):
     # input_tensor=classifier_metrics.INCEPTION_V1_INPUT):
   """Run images through a pretrained Inception classifier.
 
